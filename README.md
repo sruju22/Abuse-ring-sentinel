@@ -9,9 +9,9 @@ Built for the **Razorpay AI Builder Buildathon**, this system combines supervise
 ## 🌟 Key Capabilities & Architectural Highlights
 
 1. **Multi-Signal Risk Engine**: Modular 0–100 risk scoring combining:
-   - **40% Supervised ML Evidence**: Balanced Random Forest anomaly confidence.
+   - **40% Supervised ML Evidence**: Random Forest with balanced class weights.
    - **30% Graph Community Evidence**: Louvain community density, node degree, and link strength.
-   - **20% Coordination Evidence**: Microsecond temporal synchrony and amount matching.
+   - **20% Coordination Evidence**: Temporal activity synchrony and amount-pattern matching.
    - **10% Multi-Entity Relationship**: Multi-entity overlap protecting single-infrastructure shared households.
 2. **Defensive Non-Blocking Protocol**: Actionable tiering (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) that routes high-risk cases to human review queues rather than disruptive auto-blocking.
 3. **Strict Ground-Truth Isolation**: Operational API endpoints and dashboard views strictly exclude synthetic labels (`ring_id`, `account_type`), relying solely on observable features.
@@ -89,7 +89,7 @@ abuse-ring-sentinel/
 ├── dashboard/
 │   ├── frontend/                  # React + Vite + Tailwind + Lucide + Recharts
 │   └── run_dashboard.py           # Unified launcher script
-├── tests/                         # 38 automated unit & integration tests
+├── tests/                         # 41 automated unit & integration tests
 ├── requirements.txt
 └── README.md
 ```
@@ -105,4 +105,4 @@ source .venv/bin/activate
 pytest tests
 ```
 
-**Status**: `38 passed in ~9s`
+**Status**: `41 passed in ~9s`
