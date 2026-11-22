@@ -103,8 +103,8 @@ def compute_comprehensive_metrics(
 def evaluate_models_on_test(
     models_dir: str = "models",
     output_dir: str = "data/processed/model_results",
-    features_path: str = "data/processed/account_features.csv",
-    ground_truth_path: str = "data/processed/ground_truth.csv",
+    features_path: str = "data/processed/account_features_pit.csv",
+    ground_truth_path: str = "data/processed/ground_truth_pit.csv",
     random_state: int = 42,
 ) -> dict[str, Any]:
     """
@@ -127,12 +127,33 @@ def evaluate_models_on_test(
         frozen_thresholds = splits_meta["frozen_thresholds"]
 
     # 2. Re-create exact deterministic dataset splits
-    X, y, feature_cols = load_and_prepare_dataset(features_path, ground_truth_path)
-    splits = split_data_stratified(X, y, random_state=random_state)
-    df_gt = pd.read_csv(ground_truth_path)
+    if os.path.basename(features_path) == "account_features_pit.csv":
+        df_feats = pd.read_csv(features_path)
+        df_gt = pd.read_csv(ground_truth_path)
+        forbidden_cols = {
+            "account_id", "account_type", "ring_id", "label", "target",
+            "is_complete_window", "attack_event_count", "first_attack_time",
+            "created_at", "created_dt", "t_obs", "t_outcome_end"
+        }
+        feature_cols = [c for c in df_feats.columns if c not in forbidden_cols]
+        X = df_feats[["account_id"] + feature_cols].copy()
+        y = df_gt.set_index("account_id").loc[X["account_id"]]["target"].astype(int).reset_index(drop=True)
+    else:
+        X, y, feature_cols = load_and_prepare_dataset(features_path, ground_truth_path, allow_legacy_lifetime=True)
+        df_gt = pd.read_csv(ground_truth_path)
 
-    X_val, y_val = splits["X_val"], splits["y_val"]
-    X_test, y_test = splits["X_test"], splits["y_test"]
+    if "val_account_ids" in splits_meta and "test_account_ids" in splits_meta:
+        val_set = set(splits_meta["val_account_ids"])
+        test_set = set(splits_meta["test_account_ids"])
+        X_val = X[X["account_id"].isin(val_set)].copy()
+        y_val = y[X["account_id"].isin(val_set)].copy()
+        X_test = X[X["account_id"].isin(test_set)].copy()
+        y_test = y[X["account_id"].isin(test_set)].copy()
+        splits = {"X_val": X_val, "y_val": y_val, "X_test": X_test, "y_test": y_test}
+    else:
+        splits = split_data_stratified(X, y, random_state=random_state)
+        X_val, y_val = splits["X_val"], splits["y_val"]
+        X_test, y_test = splits["X_test"], splits["y_test"]
 
     X_val_mat = X_val[feature_cols]
     X_test_mat = X_test[feature_cols]
@@ -282,10 +303,13 @@ def print_evaluation_report(eval_results: dict[str, Any]) -> None:
         fns = sub_p[(sub_p["actual_label"] == 1) & (sub_p["predicted_label"] == 0)]
         tps = sub_p[(sub_p["actual_label"] == 1) & (sub_p["predicted_label"] == 1)]
 
+        n_actual_abuse = len(sub_p[sub_p["actual_label"] == 1])
+        n_actual_legit = len(sub_p[sub_p["actual_label"] == 0])
+
         print(f"\n  >>> Model: {name.upper()} (Total Test Accounts: {len(sub_p):,})")
-        print(f"      • True Positives Detected : {len(tps):>3d} / 90 actual abuse accounts")
-        print(f"      • False Positives (Alarms): {len(fps):>3d} / 1,910 legitimate accounts")
-        print(f"      • False Negatives (Misses): {len(fns):>3d} / 90 actual abuse accounts")
+        print(f"      • True Positives Detected : {len(tps):>3d} / {n_actual_abuse:,} actual abuse accounts")
+        print(f"      • False Positives (Alarms): {len(fps):>3d} / {n_actual_legit:,} legitimate accounts")
+        print(f"      • False Negatives (Misses): {len(fns):>3d} / {n_actual_abuse:,} actual abuse accounts")
 
         if len(fps) > 0:
             fp_type_counts = fps["account_type"].value_counts().to_dict()

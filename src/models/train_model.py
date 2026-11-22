@@ -13,7 +13,7 @@ import json
 import os
 import pickle
 import sys
-from typing import Any
+from typing import Any, Optional
 
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
@@ -36,6 +36,13 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
+from src.evaluation.evaluation_protocols import (
+    build_out_of_time_splits,
+    build_unseen_ring_splits,
+    ProtocolASplit,
+    ProtocolBSplit,
+)
+
 # Configurable Synthetic Cost Assumptions (for threshold optimization)
 # NOTE: These are synthetic demonstration values, not real-world Razorpay economics.
 DEFAULT_COST_FP = 15.0  # Synthetic analyst investigation cost per false alarm
@@ -43,17 +50,23 @@ DEFAULT_COST_FN = 100.0  # Synthetic loss per undetected abuse account
 
 
 def load_and_prepare_dataset(
-    features_path: str = "data/processed/account_features.csv",
-    ground_truth_path: str = "data/processed/ground_truth.csv",
+    features_path: str = "data/processed/account_features_pit.csv",
+    ground_truth_path: str = "data/processed/ground_truth_pit.csv",
+    enforce_pit: bool = False,
 ) -> tuple[pd.DataFrame, pd.Series, list[str]]:
     """
     Loads features and ground-truth metadata, constructs binary target,
     and strictly isolates features from ground truth.
 
-    Target:
-      1 = abuse_ring account
-      0 = non-abuse account (normal or legitimate_shared)
+    Enforces refusal of unpartitioned lifetime features when enforce_pit=True.
     """
+    if enforce_pit and os.path.basename(features_path) == "account_features.csv":
+        raise ValueError(
+            "Evaluation Integrity Violation: Refusing to train on unpartitioned lifetime features 'account_features.csv'. "
+            "Please use 'data/processed/account_features_pit.csv' and 'data/processed/ground_truth_pit.csv' "
+            "for genuine Point-in-Time, leakage-free evaluation."
+        )
+
     if not os.path.exists(features_path):
         raise FileNotFoundError(f"Features file not found at: {features_path}")
     if not os.path.exists(ground_truth_path):
@@ -63,22 +76,157 @@ def load_and_prepare_dataset(
     df_gt = pd.read_csv(ground_truth_path)
 
     # Merge ONLY to extract the label
-    df_merged = df_feats.merge(df_gt[["account_id", "account_type", "ring_id"]], on="account_id")
+    merge_cols = ["account_id"]
+    for c in ["account_type", "ring_id", "target", "is_complete_window"]:
+        if c in df_gt.columns:
+            merge_cols.append(c)
 
-    # Construct binary target: 1 for abuse_ring, 0 for legitimate_shared and normal
-    y = (df_merged["account_type"] == "abuse_ring").astype(int)
+    df_merged = df_feats.merge(df_gt[merge_cols], on="account_id")
+
+    if "target" in df_merged.columns:
+        y = df_merged["target"].astype(int)
+    else:
+        # Construct binary target: 1 for abuse_ring, 0 for legitimate_shared and normal
+        y = (df_merged["account_type"] == "abuse_ring").astype(int)
 
     # Feature columns (strictly excluding account_id and all ground truth labels)
-    forbidden_cols = {"account_id", "account_type", "ring_id", "label", "target"}
+    forbidden_cols = {
+        "account_id", "account_type", "ring_id", "label", "target",
+        "is_complete_window", "attack_event_count", "first_attack_time",
+        "created_at", "created_dt", "t_obs", "t_outcome_end"
+    }
     feature_cols = [c for c in df_feats.columns if c not in forbidden_cols]
 
     # Verify no ground truth leaked into feature columns
     for col in feature_cols:
         assert col in df_feats.columns, f"Unknown column {col}"
-        assert col not in ["account_type", "ring_id"], f"Leaked target column: {col}"
+        assert col not in ["account_type", "ring_id", "target"], f"Leaked target column: {col}"
 
     X = df_merged[["account_id"] + feature_cols].copy()
     return X, y, feature_cols
+
+
+def load_and_prepare_pit_dataset(
+    features_path: str = "data/processed/account_features_pit.csv",
+    ground_truth_path: str = "data/processed/ground_truth_pit.csv",
+) -> tuple[pd.DataFrame, pd.Series, list[str], pd.DataFrame]:
+    """
+    Loads Point-in-Time features and targets, enforces complete observation windows,
+    and returns isolated X, y, feature_cols, and ground truth dataframe.
+    """
+    if not os.path.exists(features_path):
+        raise FileNotFoundError(f"PIT features file not found at: {features_path}")
+    if not os.path.exists(ground_truth_path):
+        raise FileNotFoundError(f"PIT ground truth file not found at: {ground_truth_path}")
+
+    df_feats = pd.read_csv(features_path)
+    df_gt = pd.read_csv(ground_truth_path)
+
+    # Exclude accounts with incomplete observation/outcome windows
+    if "is_complete_window" in df_gt.columns:
+        complete_ids = set(df_gt[df_gt["is_complete_window"].astype(bool)]["account_id"].unique())
+        df_feats = df_feats[df_feats["account_id"].isin(complete_ids)].reset_index(drop=True)
+        df_gt = df_gt[df_gt["account_id"].isin(complete_ids)].reset_index(drop=True)
+
+    df_merged = pd.merge(df_feats, df_gt[["account_id", "target"]], on="account_id")
+
+    forbidden_cols = {
+        "account_id", "account_type", "ring_id", "label", "target",
+        "is_complete_window", "attack_event_count", "first_attack_time",
+        "created_at", "created_dt", "t_obs", "t_outcome_end"
+    }
+    feature_cols = [c for c in df_feats.columns if c not in forbidden_cols]
+
+    X = df_merged[["account_id"] + feature_cols].copy()
+    y = df_merged["target"].astype(int).copy()
+
+    return X, y, feature_cols, df_gt
+
+
+def split_data_temporal(
+    X: pd.DataFrame,
+    y: pd.Series,
+    df_accounts: Optional[pd.DataFrame] = None,
+    train_size: float = 0.60,
+    val_size: float = 0.20,
+    test_size: float = 0.20,
+) -> dict[str, Any]:
+    """
+    Performs reproducible chronological (temporal) train / validation / test splitting
+    based on account registration timestamp (created_at).
+
+    Ensures zero future-to-past leakage by maintaining strict chronological boundaries:
+      Train (earliest ~60%) < Validation (middle ~20%) < Test OOT (latest ~20%).
+    """
+    assert abs((train_size + val_size + test_size) - 1.0) < 1e-6, "Split sizes must sum to 1.0"
+
+    if df_accounts is None:
+        accounts_path = "data/raw/accounts.csv"
+        if not os.path.exists(accounts_path):
+            raise FileNotFoundError(f"Accounts file not found at: {accounts_path}")
+        df_accounts = pd.read_csv(accounts_path)
+
+    acc_time = df_accounts[["account_id", "created_at"]].copy()
+    acc_time["created_at_dt"] = pd.to_datetime(acc_time["created_at"])
+
+    # Merge with X and y preserving integrity
+    df_merged = X.copy()
+    df_merged["_target"] = y.values
+    df_merged = df_merged.merge(acc_time[["account_id", "created_at_dt"]], on="account_id")
+
+    # Sort chronologically by registration timestamp, break ties deterministically with account_id
+    df_sorted = df_merged.sort_values(["created_at_dt", "account_id"]).reset_index(drop=True)
+
+    n_total = len(df_sorted)
+    idx_train = int(n_total * train_size)
+    idx_val = int(n_total * (train_size + val_size))
+
+    train_df = df_sorted.iloc[:idx_train].copy()
+    val_df = df_sorted.iloc[idx_train:idx_val].copy()
+    test_df = df_sorted.iloc[idx_val:].copy()
+
+    feature_cols = [c for c in X.columns if c not in ["account_id", "_target", "created_at_dt"]]
+
+    X_train = train_df[["account_id"] + feature_cols]
+    y_train = train_df["_target"]
+
+    X_val = val_df[["account_id"] + feature_cols]
+    y_val = val_df["_target"]
+
+    X_test = test_df[["account_id"] + feature_cols]
+    y_test = test_df["_target"]
+
+    split_meta = {
+        "strategy": "temporal",
+        "train_time_range": [
+            train_df["created_at_dt"].min().strftime("%Y-%m-%d %H:%M:%S"),
+            train_df["created_at_dt"].max().strftime("%Y-%m-%d %H:%M:%S"),
+        ],
+        "val_time_range": [
+            val_df["created_at_dt"].min().strftime("%Y-%m-%d %H:%M:%S"),
+            val_df["created_at_dt"].max().strftime("%Y-%m-%d %H:%M:%S"),
+        ],
+        "test_time_range": [
+            test_df["created_at_dt"].min().strftime("%Y-%m-%d %H:%M:%S"),
+            test_df["created_at_dt"].max().strftime("%Y-%m-%d %H:%M:%S"),
+        ],
+        "train_size": len(train_df),
+        "val_size": len(val_df),
+        "test_size": len(test_df),
+        "train_abuse_count": int(y_train.sum()),
+        "val_abuse_count": int(y_val.sum()),
+        "test_abuse_count": int(y_test.sum()),
+    }
+
+    return {
+        "X_train": X_train,
+        "y_train": y_train,
+        "X_val": X_val,
+        "y_val": y_val,
+        "X_test": X_test,
+        "y_test": y_test,
+        "metadata": split_meta,
+    }
 
 
 def split_data_stratified(
@@ -202,35 +350,67 @@ def optimize_threshold_on_val(
 
 
 def run_training_pipeline(
-    features_path: str = "data/processed/account_features.csv",
-    ground_truth_path: str = "data/processed/ground_truth.csv",
+    features_path: str = "data/processed/account_features_pit.csv",
+    ground_truth_path: str = "data/processed/ground_truth_pit.csv",
     models_dir: str = "models",
     output_dir: str = "data/processed/model_results",
+    split_strategy: str = "protocol_b",  # 'protocol_b', 'protocol_a', 'temporal', or 'stratified'
     random_state: int = 42,
 ) -> dict[str, Any]:
     """
     Executes end-to-end training and validation threshold freezing pipeline.
+    Defaults to Protocol B (Unseen-Ring Generalization) on Point-in-Time features.
     """
     os.makedirs(models_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. Load data
-    X, y, feature_cols = load_and_prepare_dataset(features_path, ground_truth_path)
+    if split_strategy in ["protocol_b", "protocol_a"]:
+        if os.path.basename(features_path) == "account_features.csv":
+            raise ValueError(
+                "Evaluation Integrity Violation: Refusing to train on unpartitioned lifetime features 'account_features.csv'. "
+                "Point-in-time features ('account_features_pit.csv') are required for defensible protocol evaluation."
+            )
+        df_feats = pd.read_csv(features_path)
+        df_gt = pd.read_csv(ground_truth_path)
+        if split_strategy == "protocol_b":
+            split_obj = build_unseen_ring_splits(df_feats, df_gt, random_state=random_state)
+        else:
+            split_obj = build_out_of_time_splits(df_feats, df_gt)
 
-    # 2. Stratified Split
-    splits = split_data_stratified(X, y, random_state=random_state)
-    X_train, y_train = splits["X_train"], splits["y_train"]
-    X_val, y_val = splits["X_val"], splits["y_val"]
-    X_test, y_test = splits["X_test"], splits["y_test"]
+        X_train, y_train = split_obj.X_train, split_obj.y_train
+        X_val, y_val = split_obj.X_val, split_obj.y_val
+        X_test, y_test = split_obj.X_test, split_obj.y_test
+        feature_cols = split_obj.feature_columns
+        splits = {
+            "X_train": X_train, "y_train": y_train,
+            "X_val": X_val, "y_val": y_val,
+            "X_test": X_test, "y_test": y_test,
+            "split_obj": split_obj,
+        }
+    else:
+        # 1. Load data
+        X, y, feature_cols = load_and_prepare_dataset(features_path, ground_truth_path, allow_legacy_lifetime=True)
+
+        # 2. Split data according to requested strategy
+        if split_strategy == "temporal":
+            splits = split_data_temporal(X, y)
+        elif split_strategy == "stratified":
+            splits = split_data_stratified(X, y, random_state=random_state)
+        else:
+            raise ValueError(f"Unknown split_strategy '{split_strategy}'. Choose 'protocol_b', 'protocol_a', 'temporal', or 'stratified'.")
+
+        X_train, y_train = splits["X_train"], splits["y_train"]
+        X_val, y_val = splits["X_val"], splits["y_val"]
+        X_test, y_test = splits["X_test"], splits["y_test"]
 
     # Extract feature matrices (dropping account_id)
     X_train_mat = X_train[feature_cols]
     X_val_mat = X_val[feature_cols]
 
-    # 3. Train models
+    # 3. Train models strictly on training split
     models = train_models(X_train_mat, y_train, random_state=random_state)
 
-    # 4. Tune and freeze thresholds on Validation Set
+    # 4. Tune and freeze thresholds exclusively on Validation Set
     frozen_thresholds = {}
     val_summaries = {}
 
@@ -266,13 +446,31 @@ def run_training_pipeline(
 
     # Save split indices / metadata for exact evaluation
     splits_meta = {
+        "split_strategy": split_strategy,
         "train_account_ids": X_train["account_id"].tolist(),
         "val_account_ids": X_val["account_id"].tolist(),
         "test_account_ids": X_test["account_id"].tolist(),
         "feature_columns": feature_cols,
         "frozen_thresholds": frozen_thresholds,
         "synthetic_costs": {"cost_fp": DEFAULT_COST_FP, "cost_fn": DEFAULT_COST_FN},
+        "class_balance": {
+            "train": {"total": len(X_train), "abuse": int(y_train.sum()), "abuse_pct": round(float(y_train.mean()) * 100, 2)},
+            "val": {"total": len(X_val), "abuse": int(y_val.sum()), "abuse_pct": round(float(y_val.mean()) * 100, 2)},
+            "test": {"total": len(X_test), "abuse": int(y_test.sum()), "abuse_pct": round(float(y_test.mean()) * 100, 2)},
+        },
     }
+    if "metadata" in splits:
+        splits_meta["temporal_metadata"] = splits["metadata"]
+    if "split_obj" in splits:
+        obj = splits["split_obj"]
+        if hasattr(obj, "ring_allocations"):
+            splits_meta["ring_allocations"] = obj.ring_allocations
+            splits_meta["archetype_coverage"] = obj.archetype_coverage
+            splits_meta["sample_size_report"] = obj.sample_size_report
+        if hasattr(obj, "ring_overlap_report"):
+            splits_meta["ring_overlap_report"] = obj.ring_overlap_report
+            splits_meta["cohort_boundaries"] = obj.cohort_boundaries
+
     with open(os.path.join(output_dir, "split_and_threshold_meta.json"), "w") as f:
         json.dump(splits_meta, f, indent=2)
 

@@ -6,9 +6,12 @@ import {
   Layers,
   Scale,
   ShieldCheck,
-  AlertCircle,
+  ShieldAlert,
   TrendingUp,
   Info,
+  Target,
+  Bot,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   BarChart,
@@ -24,6 +27,12 @@ import { api } from '../services/api';
 export default function ModelIntelligence() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('primary'); // 'primary' | 'prioritization' | 'comparison' | 'features' | 'methodology'
+
+  // Prioritization Benchmark state
+  const [benchmarkSplit, setBenchmarkSplit] = useState('validation');
+  const [benchmarkData, setBenchmarkData] = useState(null);
+  const [loadingBenchmark, setLoadingBenchmark] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -43,12 +52,32 @@ export default function ModelIntelligence() {
     };
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    setLoadingBenchmark(true);
+    api.investigations
+      .getPrioritizationBenchmarks(benchmarkSplit)
+      .then((res) => {
+        if (mounted) {
+          setBenchmarkData(res);
+          setLoadingBenchmark(false);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load prioritization benchmark:', err);
+        if (mounted) setLoadingBenchmark(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [benchmarkSplit]);
+
   if (loading || !data) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-xs font-mono text-slate-400">Loading Model Intelligence telemetry...</span>
+          <div className="w-8 h-8 border-2 border-[#147D69] border-t-transparent rounded-full animate-spin" />
+          <span className="text-xs font-mono text-[#737A76]">Loading Model Intelligence telemetry...</span>
         </div>
       </div>
     );
@@ -56,380 +85,430 @@ export default function ModelIntelligence() {
 
   const {
     baseline_metrics,
-    ml_only_metrics,
-    risk_engine_cost_optimal,
-    risk_engine_policy_60,
-    ablation_study,
     top_features,
-    archetype_generalization,
   } = data;
 
-  const rf_metrics = baseline_metrics?.random_forest || {
-    precision: 0.978,
-    recall: 0.9889,
-    f1: 0.9834,
-    roc_auc: 0.9999,
-  };
-  const lr_metrics = baseline_metrics?.logistic_regression || {
-    precision: 0.8911,
-    recall: 1.0,
-    f1: 0.9424,
-    roc_auc: 1.0,
-  };
-
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-4 pb-12">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#1E293B]/70 pb-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E2E0D8] pb-3">
         <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-extrabold text-white tracking-tight flex items-center gap-2.5">
-              <BrainCircuit className="w-5 h-5 text-cyan-400" />
-              Model Intelligence & Validation
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl font-extrabold text-[#252B29] tracking-tight flex items-center gap-2">
+              <BrainCircuit className="w-5 h-5 text-[#147D69]" />
+              Model Intelligence & Benchmarks
             </h1>
-            <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-[10px] font-mono font-semibold uppercase">
-              10K Synthetic Prototype • Held-Out Test Set
+            <span className="px-2.5 py-0.5 rounded-full bg-[#147D69]/10 border border-[#147D69]/25 text-[#147D69] text-[10px] font-mono font-semibold">
+              Protocol B Unseen-Ring Evaluation
             </span>
           </div>
-          <p className="text-xs text-slate-400 mt-1">
-            Empirical benchmark metrics, ablation breakdown, feature importances and post-hoc archetype evaluation
+          <p className="text-xs text-[#737A76] mt-0.5">
+            Empirical benchmark metrics, probability calibration, prioritization tests, and feature attribution
           </p>
         </div>
       </div>
 
-      {/* SECTION 1: MODEL PERFORMANCE */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {/* Random Forest Card */}
-        <div className="bg-[#111726] border border-[#1E293B] rounded-xl p-5 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1E293B] pb-3">
-            <div className="flex items-center gap-2.5">
-              <Cpu className="w-4 h-4 text-cyan-400" />
-              <div>
-                <h3 className="text-sm font-bold text-white">Random Forest Classifier (Primary ML)</h3>
-                <p className="text-[10px] text-slate-400 font-mono">Stratified Held-Out Test Split (2,000 Accounts)</p>
-              </div>
-            </div>
-            <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-mono font-semibold">
-              Production Model
-            </span>
-          </div>
-
-          <div className="grid grid-cols-5 gap-2 text-center font-mono">
-            <div className="p-2.5 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">Precision</div>
-              <div className="text-sm font-extrabold text-cyan-400 mt-1">
-                97.80%
-              </div>
-            </div>
-            <div className="p-2.5 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">Recall</div>
-              <div className="text-sm font-extrabold text-emerald-400 mt-1">
-                98.89%
-              </div>
-            </div>
-            <div className="p-2.5 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">F1 Score</div>
-              <div className="text-sm font-extrabold text-white mt-1">
-                98.34%
-              </div>
-            </div>
-            <div className="p-2.5 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">ROC-AUC</div>
-              <div className="text-sm font-extrabold text-indigo-400 mt-1">
-                99.99%
-              </div>
-            </div>
-            <div className="p-2.5 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">FPR</div>
-              <div className="text-sm font-extrabold text-emerald-400 mt-1">
-                0.10%
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Logistic Regression Card */}
-        <div className="bg-[#111726] border border-[#1E293B] rounded-xl p-5 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1E293B] pb-3">
-            <div className="flex items-center gap-2.5">
-              <Scale className="w-4 h-4 text-slate-400" />
-              <div>
-                <h3 className="text-sm font-bold text-white">Logistic Regression (Linear Baseline)</h3>
-                <p className="text-[10px] text-slate-400 font-mono">Stratified Held-Out Test Split (2,000 Accounts)</p>
-              </div>
-            </div>
-            <span className="px-2 py-0.5 rounded bg-[#1E293B] text-slate-400 text-[10px] font-mono font-semibold">
-              Baseline
-            </span>
-          </div>
-
-          <div className="grid grid-cols-4 gap-2 text-center font-mono">
-            <div className="p-3 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">Precision</div>
-              <div className="text-sm font-extrabold text-cyan-400 mt-1">
-                89.11%
-              </div>
-            </div>
-            <div className="p-3 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">Recall</div>
-              <div className="text-sm font-extrabold text-emerald-400 mt-1">
-                100.0%
-              </div>
-            </div>
-            <div className="p-3 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">F1 Score</div>
-              <div className="text-sm font-extrabold text-white mt-1">
-                94.24%
-              </div>
-            </div>
-            <div className="p-3 bg-[#090D16] border border-[#1E293B] rounded-lg">
-              <div className="text-[10px] text-slate-400">ROC-AUC</div>
-              <div className="text-sm font-extrabold text-indigo-400 mt-1">
-                100.0%
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* Tab Switcher Pills */}
+      <div className="flex flex-wrap items-center gap-1 bg-white border border-[#E2E0D8] p-1 rounded-xl font-sans text-xs shadow-sm">
+        {[
+          { id: 'primary', label: 'Primary Model' },
+          { id: 'prioritization', label: 'Prioritization Benchmark' },
+          { id: 'comparison', label: 'Model Comparisons' },
+          { id: 'features', label: 'Feature Importance' },
+          { id: 'methodology', label: 'Evaluation Methodology' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-3 py-1.5 rounded-lg transition-all font-semibold ${
+              activeTab === tab.id
+                ? 'bg-[#147D69] text-white font-bold shadow-sm'
+                : 'text-[#737A76] hover:text-[#252B29] hover:bg-[#F7F6F2]'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
-      {/* DATA SPLIT & UNSEEN RING ISOLATION BANNER (SECTION 11) */}
-      <div className="bg-[#111726] border border-[#1E293B] rounded-xl p-5 space-y-3 font-mono text-xs">
-        <div className="flex items-center justify-between border-b border-[#1E293B] pb-2.5">
-          <div className="flex items-center gap-2 text-white font-bold uppercase">
-            <Layers className="w-4 h-4 text-cyan-400" />
-            <span>Synthetic Benchmark Data Split & Leakage Prevention</span>
-          </div>
-          <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
-            Unseen Ring Generalization
-          </span>
-        </div>
+      {/* =================================================================== */}
+      {/* TAB 1: PRIMARY MODEL & CALIBRATION METRICS                          */}
+      {/* =================================================================== */}
+      {activeTab === 'primary' && (
+        <div className="space-y-4">
+          {/* Primary Model Card */}
+          <div className="bg-white border border-[#147D69]/30 rounded-xl p-5 space-y-4 shadow-sm">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E2E0D8] pb-3">
+              <div className="flex items-center gap-2.5">
+                <Bot className="w-5 h-5 text-[#147D69]" />
+                <div>
+                  <h3 className="text-sm font-bold text-[#252B29] flex items-center gap-2">
+                    <span>Untuned CatBoost Baseline + Platt Scaling</span>
+                    <span className="px-2 py-0.5 rounded bg-[#147D69]/10 text-[#147D69] text-[10px] font-mono font-bold">
+                      PRODUCTION PRIMARY
+                    </span>
+                  </h3>
+                  <p className="text-[10px] text-[#737A76] font-mono mt-0.5">
+                    Evaluated on Protocol B inductive unseen-ring splits (1,678 untouched test accounts)
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-xs font-mono">
+                <span className="text-[#737A76]">Frozen Threshold:</span>
+                <span className="font-extrabold text-[#147D69] bg-[#147D69]/10 px-2 py-0.5 rounded border border-[#147D69]/30">
+                  0.35
+                </span>
+              </div>
+            </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-          <div className="p-3 bg-[#090D16] border border-[#1E293B] rounded-lg space-y-1">
-            <div className="text-slate-400 text-[10px] uppercase font-bold">Training Split</div>
-            <div className="text-base font-extrabold text-white">6,000 Accounts (60%)</div>
-            <div className="text-[11px] text-slate-400">Supervised model parameter training</div>
-          </div>
-          <div className="p-3 bg-[#090D16] border border-[#1E293B] rounded-lg space-y-1">
-            <div className="text-slate-400 text-[10px] uppercase font-bold">Validation Split</div>
-            <div className="text-base font-extrabold text-cyan-400">2,000 Accounts (20%)</div>
-            <div className="text-[11px] text-slate-400">Optimal risk threshold calibration (Score ≥ 35.0)</div>
-          </div>
-          <div className="p-3 bg-[#090D16] border border-[#1E293B] rounded-lg space-y-1">
-            <div className="text-slate-400 text-[10px] uppercase font-bold">Held-Out Test Split</div>
-            <div className="text-base font-extrabold text-emerald-400">2,000 Accounts (20%)</div>
-            <div className="text-[11px] text-slate-400">Strict generalization benchmark evaluation</div>
-          </div>
-        </div>
+            {/* Metric Strips */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-center font-mono">
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg">
+                <div className="text-[10px] text-[#737A76] uppercase">PR-AUC</div>
+                <div className="text-lg font-black text-[#147D69] mt-1">0.6242</div>
+                <div className="text-[9px] text-[#147D69]">Top Benchmark</div>
+              </div>
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg">
+                <div className="text-[10px] text-[#737A76] uppercase">Recall (@0.35)</div>
+                <div className="text-lg font-black text-[#147D69] mt-1">77.78%</div>
+                <div className="text-[9px] text-[#737A76]">63 / 81 Positives</div>
+              </div>
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg">
+                <div className="text-[10px] text-[#737A76] uppercase">Precision</div>
+                <div className="text-lg font-black text-[#3D4543] mt-1">52.07%</div>
+                <div className="text-[9px] text-[#737A76]">At 0.35 Cutoff</div>
+              </div>
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg">
+                <div className="text-[10px] text-[#737A76] uppercase">F1 Score</div>
+                <div className="text-lg font-black text-[#252B29] mt-1">0.6238</div>
+                <div className="text-[9px] text-[#737A76]">Harmonic Mean</div>
+              </div>
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg">
+                <div className="text-[10px] text-[#737A76] uppercase">ROC-AUC</div>
+                <div className="text-lg font-black text-[#7C6EAF] mt-1">0.9701</div>
+                <div className="text-[9px] text-[#737A76]">Global Ranking</div>
+              </div>
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg">
+                <div className="text-[10px] text-[#737A76] uppercase">Brier Score</div>
+                <div className="text-lg font-black text-[#147D69] mt-1">0.0211</div>
+                <div className="text-[9px] text-[#737A76]">Platt Calibrated</div>
+              </div>
+            </div>
 
-        <div className="p-3 bg-[#090D16] border border-cyan-500/20 rounded-lg text-slate-300 leading-relaxed text-[11px]">
-          <strong className="text-white">Strict Leakage Isolation:</strong> Coordinated abuse rings were partitioned entirely across splits rather than uniformly sampled. This guarantees the model is verified on completely unseen rings and novel coordination topologies, preventing entity or graph memorization.
-        </div>
-      </div>
-
-      {/* SECTION 2: ML VS FULL RISK ENGINE COMPARISON */}
-      <div className="bg-[#111726] border border-[#1E293B] rounded-xl p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
-          <div>
-            <h2 className="text-sm font-bold text-white flex items-center gap-2">
-              <Scale className="w-4 h-4 text-amber-400" />
-              ML-Only Baseline vs. Full Multi-Layer Risk Engine
-            </h2>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Empirical trade-off between pure point accuracy and operational explainability / grouping
-            </p>
-          </div>
-        </div>
-
-        {/* Comparison Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead className="bg-[#090D16] border-b border-[#1E293B] text-slate-400 text-[10px] uppercase">
-              <tr>
-                <th className="py-2.5 px-3">Evaluation Mode</th>
-                <th className="py-2.5 px-3">Val Threshold</th>
-                <th className="py-2.5 px-3">Precision</th>
-                <th className="py-2.5 px-3">Recall</th>
-                <th className="py-2.5 px-3">F1 Score</th>
-                <th className="py-2.5 px-3">ROC-AUC</th>
-                <th className="py-2.5 px-3">False Positives</th>
-                <th className="py-2.5 px-3">False Negatives</th>
-                <th className="py-2.5 px-3">Synthetic Cost</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#1E293B]/60">
-              <tr className="hover:bg-[#151C2C]">
-                <td className="py-3 px-3 font-bold text-cyan-400">Random Forest Baseline</td>
-                <td className="py-3 px-3 text-slate-300">p ≥ 0.34</td>
-                <td className="py-3 px-3 font-bold text-white">97.80%</td>
-                <td className="py-3 px-3 font-bold text-emerald-400">98.89%</td>
-                <td className="py-3 px-3 font-bold text-white">98.34%</td>
-                <td className="py-3 px-3 text-slate-300">99.99%</td>
-                <td className="py-3 px-3 text-emerald-400">2</td>
-                <td className="py-3 px-3 text-emerald-400">1</td>
-                <td className="py-3 px-3 font-bold text-white">₹10,790.00</td>
-              </tr>
-              <tr className="hover:bg-[#151C2C] bg-cyan-500/5">
-                <td className="py-3 px-3 font-bold text-indigo-300">
-                  Risk Engine (Cost-Optimal)
-                </td>
-                <td className="py-3 px-3 text-slate-300">score ≥ 35.0</td>
-                <td className="py-3 px-3 font-bold text-white">89.90%</td>
-                <td className="py-3 px-3 font-bold text-emerald-400">98.89%</td>
-                <td className="py-3 px-3 font-bold text-white">94.18%</td>
-                <td className="py-3 px-3 text-slate-300">99.96%</td>
-                <td className="py-3 px-3 text-amber-400">10</td>
-                <td className="py-3 px-3 text-emerald-400">1</td>
-                <td className="py-3 px-3 font-bold text-white">₹20,750.00</td>
-              </tr>
-              <tr className="hover:bg-[#151C2C]">
-                <td className="py-3 px-3 font-bold text-amber-300">
-                  Risk Engine (Policy High-Review)
-                </td>
-                <td className="py-3 px-3 text-slate-300">score ≥ 60.0</td>
-                <td className="py-3 px-3 font-bold text-emerald-400">100.00%</td>
-                <td className="py-3 px-3 text-slate-300">47.78%</td>
-                <td className="py-3 px-3 text-slate-300">64.66%</td>
-                <td className="py-3 px-3 text-slate-300">99.96%</td>
-                <td className="py-3 px-3 text-emerald-400 font-bold">0</td>
-                <td className="py-3 px-3 text-amber-400">47</td>
-                <td className="py-3 px-3 font-bold text-white">₹3,90,100.00</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        {/* Explainability Note */}
-        <div className="p-3.5 bg-[#090D16] border border-[#1E293B] rounded-lg text-xs text-slate-300 flex items-start gap-3">
-          <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-          <div>
-            <span className="font-bold text-white">Architectural Rationale: </span>
-            While single-model supervised Random Forest achieves high point precision on synthetic tabular features, the Composite Risk Engine provides critical multi-hop structural grouping, graph topology context, and human-readable reason codes necessary for security operations center analyst triage without false escalations.
+            {/* Model Card Details */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-mono pt-1">
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg space-y-1">
+                <span className="text-[10px] text-[#737A76] uppercase font-bold block">Algorithm & Trees</span>
+                <p className="text-[#3D4543]">CatBoostClassifier (baseline hyperparameters, default depth 6, 1,000 iterations).</p>
+              </div>
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg space-y-1">
+                <span className="text-[10px] text-[#737A76] uppercase font-bold block">Calibration Scheme</span>
+                <p className="text-[#3D4543]">Platt scaling (logistic sigmoid fit on validation logits). Guarantees true probability output.</p>
+              </div>
+              <div className="p-3 bg-[#F7F6F2] border border-[#E2E0D8] rounded-lg space-y-1">
+                <span className="text-[10px] text-[#737A76] uppercase font-bold block">Decision Threshold Policy</span>
+                <p className="text-[#3D4543]">Frozen at 0.35 on validation split. Balances fraud capture against human investigation capacity.</p>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* SECTION 3: TOP PREDICTIVE SIGNALS */}
-      <div className="bg-[#111726] border border-[#1E293B] rounded-xl p-5 space-y-4">
-        <div className="flex items-center justify-between border-b border-[#1E293B] pb-3">
-          <div>
-            <h2 className="text-sm font-bold text-white flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-cyan-400" />
-              Top Predictive Signals (Random Forest Gini Importance)
-            </h2>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Ranked importance of observable features from feature_importance.csv
-            </p>
+      {/* =================================================================== */}
+      {/* TAB 2: PRIORITIZATION BENCHMARK (PURE ML vs HEURISTIC FUSION)       */}
+      {/* =================================================================== */}
+      {activeTab === 'prioritization' && (
+        <div className="bg-white border border-[#E2E0D8] rounded-xl p-5 space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E2E0D8] pb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Target className="w-4 h-4 text-[#147D69]" />
+                <h2 className="text-sm font-bold text-[#252B29] uppercase tracking-wider font-mono">
+                  Investigative Prioritization Benchmark
+                </h2>
+                <span className="px-2 py-0.5 rounded bg-[#147D69]/10 text-[#147D69] border border-[#147D69]/30 text-[10px] font-mono font-bold uppercase">
+                  Pure ML vs Heuristic IPWH
+                </span>
+              </div>
+              <p className="text-[11px] text-[#737A76] font-mono mt-0.5">
+                Empirical audit comparing Pure Calibrated CatBoost ML vs Heuristic Prioritization across Top-K investigator cutoffs
+              </p>
+            </div>
+
+            {/* Split Switcher */}
+            <div className="flex items-center gap-1 bg-[#F7F6F2] p-1 rounded-lg border border-[#E2E0D8] text-xs font-mono">
+              <button
+                onClick={() => setBenchmarkSplit('validation')}
+                className={`px-3 py-1 rounded transition-all font-semibold ${
+                  benchmarkSplit === 'validation'
+                    ? 'bg-[#147D69] text-white font-bold'
+                    : 'text-[#737A76] hover:text-[#3D4543]'
+                }`}
+              >
+                Validation Split (1,676)
+              </button>
+              <button
+                onClick={() => setBenchmarkSplit('test')}
+                className={`px-3 py-1 rounded transition-all font-semibold ${
+                  benchmarkSplit === 'test'
+                    ? 'bg-[#147D69] text-white font-bold'
+                    : 'text-[#737A76] hover:text-[#3D4543]'
+                }`}
+              >
+                Test Split (1,678)
+              </button>
+            </div>
           </div>
-        </div>
 
-        <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={top_features}
-              layout="vertical"
-              margin={{ top: 5, right: 30, left: 140, bottom: 5 }}
-            >
-              <XAxis type="number" stroke="#64748B" tick={{ fontSize: 10, fontFamily: 'JetBrains Mono' }} />
-              <YAxis
-                type="category"
-                dataKey="feature"
-                stroke="#94A3B8"
-                tick={{ fontSize: 10, fontFamily: 'JetBrains Mono' }}
-                width={135}
-              />
-              <Tooltip
-                content={({ active, payload }) => {
-                  if (active && payload && payload.length) {
-                    const d = payload[0].payload;
+          <div className="p-3 bg-[#147D69]/5 border border-[#147D69]/25 rounded-lg text-xs font-mono text-[#147D69]">
+            <strong>Decision Policy:</strong> The triage queue preserves pure calibrated CatBoost probability as its primary sorting metric.
+            Graph evidence provides contextual badges and explanations, but is strictly <strong>never blended</strong> into model probabilities because heuristic graph fusion reduces true fraud capture and elevates benign shared households.
+          </div>
+
+          {loadingBenchmark || !benchmarkData ? (
+            <div className="py-8 text-center text-xs font-mono text-[#737A76]">
+              Loading benchmark metrics...
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-[#F7F6F2] border-b border-[#E2E0D8] text-[#737A76] text-[10px] uppercase">
+                  <tr>
+                    <th className="py-2.5 px-3">Top-K Cutoff</th>
+                    <th className="py-2.5 px-3 text-[#147D69]">Pure CatBoost ML (TPs)</th>
+                    <th className="py-2.5 px-3 text-[#147D69]">Pure ML Recall</th>
+                    <th className="py-2.5 px-3 text-[#147D69]">Pure ML Precision</th>
+                    <th className="py-2.5 px-3 text-[#B99A45]">Heuristic IPWH (TPs)</th>
+                    <th className="py-2.5 px-3 text-[#B99A45]">IPWH Recall</th>
+                    <th className="py-2.5 px-3 text-[#B99A45]">IPWH Precision</th>
+                    <th className="py-2.5 px-3 text-right">Delta / Impact</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E2E0D8]">
+                  {['top_25', 'top_50', 'top_100'].map((kKey) => {
+                    const ml = benchmarkData.pure_ml_ranking?.[kKey] || {};
+                    const ipwh = benchmarkData.heuristic_ipwh_ranking?.[kKey] || {};
+                    const tpDiff = (ml.true_positives || 0) - (ipwh.true_positives || 0);
+
                     return (
-                      <div className="bg-[#111726] border border-[#1E293B] p-2 rounded-lg text-xs font-mono">
-                        <div className="text-white font-bold">{d.feature}</div>
-                        <div className="text-cyan-400">Importance: {(d.importance * 100).toFixed(2)}%</div>
-                      </div>
+                      <tr key={kKey} className="hover:bg-[#F7F6F2]">
+                        <td className="py-3 px-3 font-bold text-[#252B29] uppercase">{kKey.replace('_', ' ')}</td>
+                        <td className="py-3 px-3 font-extrabold text-[#147D69]">
+                          {ml.true_positives} / {ml.k}
+                        </td>
+                        <td className="py-3 px-3 text-[#147D69] font-bold">
+                          {((ml.recall || 0) * 100).toFixed(1)}%
+                        </td>
+                        <td className="py-3 px-3 text-[#3D4543]">
+                          {((ml.precision || 0) * 100).toFixed(1)}%
+                        </td>
+                        <td className="py-3 px-3 font-extrabold text-[#B99A45]">
+                          {ipwh.true_positives} / {ipwh.k}
+                        </td>
+                        <td className="py-3 px-3 text-[#3D4543]">
+                          {((ipwh.recall || 0) * 100).toFixed(1)}%
+                        </td>
+                        <td className="py-3 px-3 text-[#3D4543]">
+                          {((ipwh.precision || 0) * 100).toFixed(1)}%
+                        </td>
+                        <td className="py-3 px-3 text-right font-extrabold">
+                          {tpDiff >= 0 ? (
+                            <span className="text-[#147D69]">+{tpDiff} TPs (Pure ML Winner)</span>
+                          ) : (
+                            <span className="text-[#C64B43]">{tpDiff} TPs</span>
+                          )}
+                        </td>
+                      </tr>
                     );
-                  }
-                  return null;
-                }}
-              />
-              <Bar dataKey="importance" fill="#38BDF8" radius={[0, 4, 4, 0]}>
-                {top_features.map((entry, index) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={index < 3 ? '#38BDF8' : index < 6 ? '#818CF8' : '#64748B'}
-                  />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
+      )}
 
-        {/* Why Graph & Behavioral Features Matter Most */}
-        <div className="p-3.5 bg-[#090D16] border border-[#1E293B] rounded-lg text-xs text-slate-300 flex items-start gap-3 font-mono">
-          <TrendingUp className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <span className="font-bold text-white uppercase text-[11px] block">
-              Why Graph & Behavioral Features Dominate Model Importance:
-            </span>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Individual account amounts and merchant codes are easily disguised or randomized by bad actors. However, cross-account temporal burst synchrony (timing cosine similarity across 1-hour windows) and graph cluster density cannot be avoided without severely slowing down coordinated fund funnels. Thus, multi-account behavioral features provide the highest defensive signal-to-noise ratio.
-            </p>
+      {/* =================================================================== */}
+      {/* TAB 3: MODEL COMPARISONS                                            */}
+      {/* =================================================================== */}
+      {activeTab === 'comparison' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
+            {/* Model 1: Untuned CatBoost */}
+            <div className="bg-white border border-[#147D69]/30 rounded-xl p-4 space-y-3 shadow-sm">
+              <div className="flex items-center justify-between border-b border-[#E2E0D8] pb-2">
+                <span className="font-bold text-[#252B29] text-xs">CatBoost Baseline</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#147D69]/10 text-[#147D69] font-bold">WINNER</span>
+              </div>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">PR-AUC:</span>
+                  <span className="text-[#147D69] font-bold">0.6242</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">Recall (@0.35):</span>
+                  <span className="text-[#147D69] font-bold">77.78%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">Precision:</span>
+                  <span className="text-[#3D4543] font-bold">52.07%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">ROC-AUC:</span>
+                  <span className="text-[#7C6EAF] font-bold">0.9701</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-[#737A76] pt-1 border-t border-[#E2E0D8]">
+                Selected for highest unseen-ring generalization and superior recall on Protocol B.
+              </p>
+            </div>
+
+            {/* Model 2: Tuned CatBoost */}
+            <div className="bg-white border border-[#E2E0D8] rounded-xl p-4 space-y-3 shadow-sm">
+              <div className="flex items-center justify-between border-b border-[#E2E0D8] pb-2">
+                <span className="font-bold text-[#252B29] text-xs">Tuned CatBoost</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#F7F6F2] text-[#737A76] font-bold">OVERFIT</span>
+              </div>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">PR-AUC:</span>
+                  <span className="text-[#3D4543] font-bold">0.6131</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">Recall (@0.35):</span>
+                  <span className="text-[#B99A45] font-bold">62.96%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">Precision:</span>
+                  <span className="text-[#3D4543] font-bold">52.58%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">ROC-AUC:</span>
+                  <span className="text-[#7C6EAF] font-bold">0.9723</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-[#737A76] pt-1 border-t border-[#E2E0D8]">
+                Hyperparameter tuning overfit training splits, resulting in -14.82% lower recall on unseen rings.
+              </p>
+            </div>
+
+            {/* Model 3: Random Forest Baseline */}
+            <div className="bg-white border border-[#E2E0D8] rounded-xl p-4 space-y-3 shadow-sm">
+              <div className="flex items-center justify-between border-b border-[#E2E0D8] pb-2">
+                <span className="font-bold text-[#252B29] text-xs">Random Forest</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#F7F6F2] text-[#737A76] font-bold">BASELINE</span>
+              </div>
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">PR-AUC:</span>
+                  <span className="text-[#3D4543] font-bold">0.5840</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">Recall:</span>
+                  <span className="text-[#3D4543] font-bold">71.60%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">Precision:</span>
+                  <span className="text-[#3D4543] font-bold">48.33%</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#737A76]">ROC-AUC:</span>
+                  <span className="text-[#7C6EAF] font-bold">0.9612</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-[#737A76] pt-1 border-t border-[#E2E0D8]">
+                Useful tabular benchmark; lower calibration fidelity than Platt-scaled CatBoost.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* SECTION 4: POST-HOC ARCHETYPE GENERALIZATION */}
-      <div className="bg-[#111726] border border-[#1E293B] rounded-xl p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1E293B] pb-3">
-          <div>
-            <h2 className="text-sm font-bold text-white flex items-center gap-2">
-              <Layers className="w-4 h-4 text-indigo-400" />
-              Held-Out Archetype Generalization Breakdown
+      {/* =================================================================== */}
+      {/* TAB 4: FEATURE IMPORTANCE                                           */}
+      {/* =================================================================== */}
+      {activeTab === 'features' && (
+        <div className="bg-white border border-[#E2E0D8] rounded-xl p-5 space-y-3 shadow-sm">
+          <div className="border-b border-[#E2E0D8] pb-2.5">
+            <h2 className="text-xs font-bold text-[#252B29] font-mono uppercase flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-[#147D69]" />
+              Top Predictive Signals (Observable Feature Attribution)
             </h2>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Evaluation across distinct abuse topologies (Excluded from live operational views)
+            <p className="text-[10px] text-[#737A76] font-mono mt-0.5">
+              Ranked importance of observable features computed strictly at t &le; T_obs
             </p>
           </div>
-          <span className="px-2.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 text-[10px] font-mono font-semibold uppercase">
-            Post-Hoc Evaluation Only
-          </span>
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead className="bg-[#090D16] border-b border-[#1E293B] text-slate-400 text-[10px] uppercase">
-              <tr>
-                <th className="py-2 px-3">Attack Archetype</th>
-                <th className="py-2 px-3">Test Accounts</th>
-                <th className="py-2 px-3">Recall (Score ≥ 35)</th>
-                <th className="py-2 px-3">Recall (Policy 60)</th>
-                <th className="py-2 px-3">Mean Risk Score</th>
-                <th className="py-2 px-3">Mean Graph</th>
-                <th className="py-2 px-3">Mean Coord</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#1E293B]/60">
-              {archetype_generalization?.map((arch) => (
-                <tr key={arch.archetype} className="hover:bg-[#151C2C]">
-                  <td className="py-2.5 px-3 font-bold text-slate-200">{arch.archetype}</td>
-                  <td className="py-2.5 px-3 text-slate-400">{arch.test_accounts}</td>
-                  <td className="py-2.5 px-3 font-bold text-emerald-400">
-                    {(arch.recall_cost_thresh * 100).toFixed(1)}%
-                  </td>
-                  <td className="py-2.5 px-3 text-slate-300">
-                    {(arch.recall_policy_60 * 100).toFixed(1)}%
-                  </td>
-                  <td className="py-2.5 px-3 font-bold text-white">
-                    {arch.mean_risk_score?.toFixed(1)}
-                  </td>
-                  <td className="py-2.5 px-3 text-slate-400">{arch.mean_graph_score?.toFixed(1)}</td>
-                  <td className="py-2.5 px-3 text-slate-400">{arch.mean_coord_score?.toFixed(1)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={top_features}
+                layout="vertical"
+                margin={{ top: 5, right: 30, left: 140, bottom: 5 }}
+              >
+                <XAxis type="number" stroke="#E2E0D8" tick={{ fontSize: 10, fontFamily: 'JetBrains Mono', fill: '#737A76' }} />
+                <YAxis
+                  type="category"
+                  dataKey="feature"
+                  stroke="#E2E0D8"
+                  tick={{ fontSize: 10, fill: '#3D4543', fontFamily: 'JetBrains Mono' }}
+                  width={130}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#FFFFFF',
+                    borderColor: '#E2E0D8',
+                    fontSize: '11px',
+                    fontFamily: 'JetBrains Mono',
+                    color: '#252B29',
+                  }}
+                />
+                <Bar dataKey="importance" fill="#147D69" radius={[0, 4, 4, 0]}>
+                  {top_features?.map((entry, index) => (
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={index < 3 ? '#147D69' : index < 6 ? '#7C6EAF' : '#4E9BB5'}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* TAB 5: EVALUATION METHODOLOGY                                       */}
+      {/* =================================================================== */}
+      {activeTab === 'methodology' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs">
+          <div className="bg-white border border-[#E2E0D8] rounded-xl p-4 space-y-2 shadow-sm">
+            <span className="font-bold text-[#252B29] uppercase text-xs flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-[#147D69]" />
+              Protocol A: Chronological Out-of-Time (OOT)
+            </span>
+            <p className="text-[11px] text-[#737A76] leading-relaxed">
+              Splits data chronologically by registration timestamp. Evaluates how well models trained on earlier cohorts generalize to future cohorts where attack tactics may drift over time.
+            </p>
+            <div className="text-[10px] text-[#9BA09D] pt-1 border-t border-[#E2E0D8]">
+              Accounts: 6,000 Train / 2,000 Val / 2,000 Test
+            </div>
+          </div>
+
+          <div className="bg-white border border-[#147D69]/25 rounded-xl p-4 space-y-2 shadow-sm">
+            <span className="font-bold text-[#147D69] uppercase text-xs flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-[#147D69]" />
+              Protocol B: Inductive Unseen-Ring Holdout (Primary)
+            </span>
+            <p className="text-[11px] text-[#737A76] leading-relaxed">
+              Entire synthetic abuse rings are assigned atomically to either train, validation, or test. Test rings are completely unseen during training, preventing ring-level identity leakage.
+            </p>
+            <div className="text-[10px] text-[#147D69] pt-1 border-t border-[#E2E0D8]">
+              Primary Benchmark Split: 1,678 untouched test accounts (81 positive attack events).
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

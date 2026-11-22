@@ -10,6 +10,7 @@ import pandas as pd
 from src.models.train_model import (
     load_and_prepare_dataset,
     split_data_stratified,
+    split_data_temporal,
     train_models,
     optimize_threshold_on_val,
     run_training_pipeline,
@@ -101,6 +102,71 @@ class TestModelPipeline(unittest.TestCase):
         df_preds = eval_res["predictions"]
         self.assertEqual(df_preds["predicted_probability"].isna().sum(), 0)
         self.assertFalse(np.isinf(df_preds["predicted_probability"].values).any())
+
+    def test_chronological_temporal_split(self):
+        """Verify strict chronological ordering and boundary non-leakage in temporal splits."""
+        X, y, _ = load_and_prepare_dataset()
+        splits = split_data_temporal(X, y)
+
+        meta = splits["metadata"]
+        train_max = meta["train_time_range"][1]
+        val_min = meta["val_time_range"][0]
+        val_max = meta["val_time_range"][1]
+        test_min = meta["test_time_range"][0]
+
+        # Chronological boundary: train <= val <= test
+        self.assertLessEqual(train_max, val_min, "Train time overlaps with val time!")
+        self.assertLessEqual(val_max, test_min, "Val time overlaps with test time!")
+
+        # All splits have accounts and positive targets
+        self.assertGreater(splits["y_train"].sum(), 0)
+        self.assertGreater(splits["y_val"].sum(), 0)
+        self.assertGreater(splits["y_test"].sum(), 0)
+
+        # No duplicate accounts across splits
+        train_ids = set(splits["X_train"]["account_id"])
+        val_ids = set(splits["X_val"]["account_id"])
+        test_ids = set(splits["X_test"]["account_id"])
+        self.assertEqual(len(train_ids.intersection(val_ids)), 0)
+        self.assertEqual(len(train_ids.intersection(test_ids)), 0)
+        self.assertEqual(len(val_ids.intersection(test_ids)), 0)
+
+    def test_scaler_fitted_only_on_train(self):
+        """Verify that StandardScaler parameters are strictly determined by training fold."""
+        X, y, feature_cols = load_and_prepare_dataset()
+        splits = split_data_temporal(X, y)
+
+        X_train_mat = splits["X_train"][feature_cols]
+        X_val_mat = splits["X_val"][feature_cols]
+
+        models = train_models(X_train_mat, splits["y_train"])
+        scaler = models["logistic_regression"].named_steps["scaler"]
+
+        # Scaler mean must match X_train_mat mean, NOT full dataset or val
+        expected_train_mean = X_train_mat.mean(axis=0).values
+        np.testing.assert_allclose(scaler.mean_, expected_train_mean, rtol=1e-5)
+
+        # Transforming val must NOT change scaler.mean_
+        mean_before = scaler.mean_.copy()
+        _ = models["logistic_regression"].predict_proba(X_val_mat)
+        np.testing.assert_array_equal(scaler.mean_, mean_before)
+
+    def test_validation_threshold_freezing_isolation(self):
+        """Verify that validation thresholds are strictly frozen and applied to test data."""
+        y_val = np.array([0, 0, 0, 0, 1, 1, 1])
+        # Probabilities where best threshold for max F1 is 0.60
+        y_val_probs = np.array([0.1, 0.2, 0.3, 0.4, 0.7, 0.8, 0.9])
+
+        best_t, res = optimize_threshold_on_val(y_val, y_val_probs, metric_objective="max_f1")
+        self.assertEqual(res["best_threshold"], best_t)
+
+        # Applying frozen threshold to test
+        y_test = np.array([0, 0, 1, 1])
+        y_test_probs = np.array([0.2, 0.35, 0.65, 0.85])
+        test_metrics = compute_comprehensive_metrics(y_test, y_test_probs, threshold=best_t)
+        self.assertEqual(test_metrics["threshold"], best_t)
+        self.assertEqual(test_metrics["true_positives"], 2)
+        self.assertEqual(test_metrics["false_positives"], 0)
 
 
 if __name__ == "__main__":

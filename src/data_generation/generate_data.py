@@ -80,9 +80,11 @@ def generate_synthetic_data(
         config = PRESETS["scale_10k"]
 
     set_seed(config.random_seed)
+    abuse_noise_rng = random.Random(config.random_seed + 12345)
 
     accounts: list[dict[str, Any]] = []
     transactions: list[dict[str, Any]] = []
+    attack_events: list[dict[str, Any]] = []
 
     start_date = config.start_date
     duration_days = config.duration_days
@@ -320,6 +322,7 @@ def generate_synthetic_data(
             r_devs = [f"DEV_R_{ring_idx}_{i}" for i in range(1, ring_size + 1)]
 
         ring_accounts = []
+        ring_acc_fail_rates = {}
         for i in range(ring_size):
             acc_id = f"ACC_{account_idx:06d}"
             account_idx += 1
@@ -344,6 +347,7 @@ def generate_synthetic_data(
                 "account_type": "abuse_ring",
             })
             ring_accounts.append((acc_id, acc_created))
+            ring_acc_fail_rates[acc_id] = abuse_noise_rng.uniform(0.025, 0.075)
 
         # ---------------------------------------------------------------------
         # Generate Ring Transaction Activity by Archetype
@@ -351,19 +355,35 @@ def generate_synthetic_data(
         if archetype == "INFRASTRUCTURE_LINKED":
             # Cover retail payments followed by clustered micro-cashouts
             for acc_id, acc_created in ring_accounts:
+                f_rate = ring_acc_fail_rates.get(acc_id, 0.05)
                 # 3-6 cover retail payments
                 for _ in range(random.randint(3, 6)):
                     t_time = acc_created + timedelta(days=random.uniform(0.5, 3.0), hours=sample_diurnal_hour(), minutes=random.randint(0, 59))
                     amt = float(np.clip(np.random.gamma(shape=2.0, scale=20.0), 10.0, 150.0))
+                    m_choice = random.choice(ring_merchants)
+                    noise_p = abuse_noise_rng.random()
+                    if noise_p < 0.04:
+                        tx_t = "refund"
+                        m_id = m_choice
+                        d_id = ""
+                    elif noise_p < 0.12:
+                        tx_t = "transfer"
+                        m_id = ""
+                        d_id = abuse_noise_rng.choice(ring_destinations)
+                    else:
+                        tx_t = "payment"
+                        m_id = m_choice
+                        d_id = ""
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
                     transactions.append({
                         "transaction_id": f"TX_{tx_idx:08d}",
                         "account_id": acc_id,
                         "timestamp": t_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": round(amt, 2),
-                        "merchant_id": random.choice(ring_merchants),
-                        "destination_id": "",
-                        "transaction_type": "payment",
-                        "status": "SUCCESS",
+                        "merchant_id": m_id,
+                        "destination_id": d_id,
+                        "transaction_type": tx_t,
+                        "status": status,
                     })
                     tx_idx += 1
 
@@ -371,21 +391,33 @@ def generate_synthetic_data(
                 for _ in range(random.randint(4, 9)):
                     cashout_time = start_date + timedelta(days=activation_day, hours=14, minutes=random.randint(0, 50))
                     c_amt = round(random.uniform(18.0, 32.0), 2)
+                    m_choice = random.choice(ring_merchants)
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
+                    tx_id_str = f"TX_{tx_idx:08d}"
                     transactions.append({
-                        "transaction_id": f"TX_{tx_idx:08d}",
+                        "transaction_id": tx_id_str,
                         "account_id": acc_id,
                         "timestamp": cashout_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": c_amt,
-                        "merchant_id": random.choice(ring_merchants),
+                        "merchant_id": m_choice,
                         "destination_id": "",
                         "transaction_type": "cashout",
-                        "status": "SUCCESS",
+                        "status": status,
+                    })
+                    attack_events.append({
+                        "event_id": f"EV_{len(attack_events)+1:08d}",
+                        "transaction_id": tx_id_str,
+                        "account_id": acc_id,
+                        "timestamp": cashout_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "attack_type": "micro_cashout_burst",
+                        "ring_id": ring_id,
                     })
                     tx_idx += 1
 
         elif archetype == "DISTRIBUTED_FUNNEL":
             # Unique IPs/devices, all funneling structured funds into narrow destinations
             for acc_id, acc_created in ring_accounts:
+                f_rate = ring_acc_fail_rates.get(acc_id, 0.05)
                 num_tx = random.randint(8, 16)
                 for tx_step in range(num_tx):
                     t_time = start_date + timedelta(days=activation_day + (tx_step * 0.8), hours=sample_diurnal_hour(), minutes=random.randint(0, 59))
@@ -394,16 +426,41 @@ def generate_synthetic_data(
 
                     amt = round(random.uniform(38.0, 85.0), 2)
                     dest = random.choice(ring_destinations)
+                    orig_type = "p2p" if random.random() < 0.65 else "transfer"
+                    noise_p = abuse_noise_rng.random()
+                    if noise_p < 0.20:
+                        tx_t = "payment"
+                        m_id = abuse_noise_rng.choice(all_merchants)
+                        d_id = ""
+                    elif noise_p < 0.23:
+                        tx_t = "refund"
+                        m_id = abuse_noise_rng.choice(all_merchants)
+                        d_id = ""
+                    else:
+                        tx_t = orig_type
+                        m_id = ""
+                        d_id = dest
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
+                    tx_id_str = f"TX_{tx_idx:08d}"
                     transactions.append({
-                        "transaction_id": f"TX_{tx_idx:08d}",
+                        "transaction_id": tx_id_str,
                         "account_id": acc_id,
                         "timestamp": t_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": amt,
-                        "merchant_id": "",
-                        "destination_id": dest,
-                        "transaction_type": "p2p" if random.random() < 0.65 else "transfer",
-                        "status": "SUCCESS",
+                        "merchant_id": m_id,
+                        "destination_id": d_id,
+                        "transaction_type": tx_t,
+                        "status": status,
                     })
+                    if tx_t == orig_type:
+                        attack_events.append({
+                            "event_id": f"EV_{len(attack_events)+1:08d}",
+                            "transaction_id": tx_id_str,
+                            "account_id": acc_id,
+                            "timestamp": t_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "attack_type": "destination_funnel",
+                            "ring_id": ring_id,
+                        })
                     tx_idx += 1
 
         elif archetype == "SYNCHRONIZED_BURST":
@@ -412,18 +469,44 @@ def generate_synthetic_data(
             for w in range(num_waves):
                 wave_time = start_date + timedelta(days=activation_day + (w * 2.5), hours=random.choice([10, 14, 18, 22]), minutes=random.randint(10, 40))
                 for acc_id, _ in ring_accounts:
+                    f_rate = ring_acc_fail_rates.get(acc_id, 0.05)
                     burst_time = wave_time + timedelta(seconds=random.randint(5, 90))
                     amt = round(random.uniform(75.0, 120.0), 2)
+                    dest_c = random.choice(ring_destinations)
+                    noise_p = abuse_noise_rng.random()
+                    if noise_p < 0.15:
+                        tx_t = "payment"
+                        m_id = abuse_noise_rng.choice(all_merchants)
+                        d_id = ""
+                    elif noise_p < 0.18:
+                        tx_t = "refund"
+                        m_id = abuse_noise_rng.choice(all_merchants)
+                        d_id = ""
+                    else:
+                        tx_t = "transfer"
+                        m_id = ""
+                        d_id = dest_c
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
+                    tx_id_str = f"TX_{tx_idx:08d}"
                     transactions.append({
-                        "transaction_id": f"TX_{tx_idx:08d}",
+                        "transaction_id": tx_id_str,
                         "account_id": acc_id,
                         "timestamp": burst_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": amt,
-                        "merchant_id": "",
-                        "destination_id": random.choice(ring_destinations),
-                        "transaction_type": "transfer",
-                        "status": "SUCCESS",
+                        "merchant_id": m_id,
+                        "destination_id": d_id,
+                        "transaction_type": tx_t,
+                        "status": status,
                     })
+                    if tx_t == "transfer":
+                        attack_events.append({
+                            "event_id": f"EV_{len(attack_events)+1:08d}",
+                            "transaction_id": tx_id_str,
+                            "account_id": acc_id,
+                            "timestamp": burst_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "attack_type": "synchronized_wave",
+                            "ring_id": ring_id,
+                        })
                     tx_idx += 1
 
         elif archetype == "TASK_JOB_SCAM":
@@ -435,84 +518,176 @@ def generate_synthetic_data(
 
                 # Tier 1 Task Deposits
                 for acc_id, _ in ring_accounts:
+                    f_rate = ring_acc_fail_rates.get(acc_id, 0.05)
                     t1_time = start_date + timedelta(days=wave_day, hours=11, minutes=random.randint(10, 45))
                     t1_amt = round(random.uniform(118.0, 138.0), 2)
+                    dest_c = random.choice(ring_destinations)
+                    noise_p = abuse_noise_rng.random()
+                    if noise_p < 0.12:
+                        tx_t = "payment"
+                        m_id = abuse_noise_rng.choice(all_merchants)
+                        d_id = ""
+                    else:
+                        tx_t = "p2p"
+                        m_id = ""
+                        d_id = dest_c
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
+                    tx_id_str = f"TX_{tx_idx:08d}"
                     transactions.append({
-                        "transaction_id": f"TX_{tx_idx:08d}",
+                        "transaction_id": tx_id_str,
                         "account_id": acc_id,
                         "timestamp": t1_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": t1_amt,
-                        "merchant_id": "",
-                        "destination_id": random.choice(ring_destinations),
-                        "transaction_type": "p2p",
-                        "status": "SUCCESS",
+                        "merchant_id": m_id,
+                        "destination_id": d_id,
+                        "transaction_type": tx_t,
+                        "status": status,
                     })
+                    if tx_t == "p2p":
+                        attack_events.append({
+                            "event_id": f"EV_{len(attack_events)+1:08d}",
+                            "transaction_id": tx_id_str,
+                            "account_id": acc_id,
+                            "timestamp": t1_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "attack_type": "task_deposit_scam",
+                            "ring_id": ring_id,
+                        })
                     tx_idx += 1
 
                 # Tier 2 Task Deposits (30 mins later)
                 for acc_id, _ in ring_accounts:
+                    f_rate = ring_acc_fail_rates.get(acc_id, 0.05)
                     t2_time = start_date + timedelta(days=wave_day, hours=11, minutes=random.randint(50, 59), seconds=random.randint(0, 59))
                     t2_amt = round(random.uniform(310.0, 345.0), 2)
+                    dest_c = random.choice(ring_destinations)
+                    noise_p = abuse_noise_rng.random()
+                    if noise_p < 0.08:
+                        tx_t = "payment"
+                        m_id = abuse_noise_rng.choice(all_merchants)
+                        d_id = ""
+                    else:
+                        tx_t = "p2p"
+                        m_id = ""
+                        d_id = dest_c
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
+                    tx_id_str = f"TX_{tx_idx:08d}"
                     transactions.append({
-                        "transaction_id": f"TX_{tx_idx:08d}",
+                        "transaction_id": tx_id_str,
                         "account_id": acc_id,
                         "timestamp": t2_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": t2_amt,
-                        "merchant_id": "",
-                        "destination_id": random.choice(ring_destinations),
-                        "transaction_type": "p2p",
-                        "status": "SUCCESS",
+                        "merchant_id": m_id,
+                        "destination_id": d_id,
+                        "transaction_type": tx_t,
+                        "status": status,
                     })
+                    if tx_t == "p2p":
+                        attack_events.append({
+                            "event_id": f"EV_{len(attack_events)+1:08d}",
+                            "transaction_id": tx_id_str,
+                            "account_id": acc_id,
+                            "timestamp": t2_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "attack_type": "task_deposit_scam",
+                            "ring_id": ring_id,
+                        })
                     tx_idx += 1
 
                 # Rapid Settlement Transfer (1 hour later)
                 for acc_id, _ in ring_accounts:
+                    f_rate = ring_acc_fail_rates.get(acc_id, 0.05)
                     settle_time = start_date + timedelta(days=wave_day, hours=12, minutes=random.randint(20, 55))
                     settle_amt = round(random.uniform(420.0, 470.0), 2)
+                    dest_c = random.choice(ring_destinations)
+                    noise_p = abuse_noise_rng.random()
+                    if noise_p < 0.04:
+                        tx_t = "refund"
+                        m_id = abuse_noise_rng.choice(all_merchants)
+                        d_id = ""
+                    else:
+                        tx_t = "transfer"
+                        m_id = ""
+                        d_id = dest_c
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
+                    tx_id_str = f"TX_{tx_idx:08d}"
                     transactions.append({
-                        "transaction_id": f"TX_{tx_idx:08d}",
+                        "transaction_id": tx_id_str,
                         "account_id": acc_id,
                         "timestamp": settle_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": settle_amt,
-                        "merchant_id": "",
-                        "destination_id": random.choice(ring_destinations),
-                        "transaction_type": "transfer",
-                        "status": "SUCCESS",
+                        "merchant_id": m_id,
+                        "destination_id": d_id,
+                        "transaction_type": tx_t,
+                        "status": status,
                     })
+                    if tx_t == "transfer":
+                        attack_events.append({
+                            "event_id": f"EV_{len(attack_events)+1:08d}",
+                            "transaction_id": tx_id_str,
+                            "account_id": acc_id,
+                            "timestamp": settle_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "attack_type": "task_scam_settlement",
+                            "ring_id": ring_id,
+                        })
                     tx_idx += 1
 
         else:
             # COVER_TRAFFIC_HYBRID & MIXED_PARTIAL
             for acc_id, acc_created in ring_accounts:
+                f_rate = ring_acc_fail_rates.get(acc_id, 0.05)
                 num_tx = random.randint(10, 20)
                 for step in range(num_tx):
                     t_time = acc_created + timedelta(days=random.uniform(1.0, duration_days - 5.0), hours=sample_diurnal_hour(), minutes=random.randint(0, 59))
                     if t_time > end_date:
                         t_time = end_date - timedelta(hours=random.randint(1, 12))
 
+                    is_scripted_attack = False
                     if random.random() < 0.40:
                         # Scripted cashout/transfer
                         amt = round(random.uniform(45.0, 95.0), 2)
                         tx_type = random.choice(["cashout", "transfer"])
                         merch = random.choice(ring_merchants) if tx_type == "cashout" else ""
                         dest = random.choice(ring_destinations) if tx_type == "transfer" else ""
+                        tx_type_eff = tx_type
+                        is_scripted_attack = True
                     else:
                         # Background cover payment
                         amt = float(np.clip(np.random.gamma(shape=2.0, scale=20.0), 10.0, 120.0))
-                        tx_type = "payment"
-                        merch = random.choice(all_merchants)
-                        dest = ""
+                        merch_choice = random.choice(all_merchants)
+                        noise_p = abuse_noise_rng.random()
+                        if noise_p < 0.04:
+                            tx_type_eff = "refund"
+                            merch = merch_choice
+                            dest = ""
+                        elif noise_p < 0.12:
+                            tx_type_eff = "p2p"
+                            merch = ""
+                            dest = abuse_noise_rng.choice(ring_destinations)
+                        else:
+                            tx_type_eff = "payment"
+                            merch = merch_choice
+                            dest = ""
 
+                    status = "FAILED" if abuse_noise_rng.random() < f_rate else "SUCCESS"
+                    tx_id_str = f"TX_{tx_idx:08d}"
                     transactions.append({
-                        "transaction_id": f"TX_{tx_idx:08d}",
+                        "transaction_id": tx_id_str,
                         "account_id": acc_id,
                         "timestamp": t_time.strftime("%Y-%m-%d %H:%M:%S"),
                         "amount": round(amt, 2),
                         "merchant_id": merch,
                         "destination_id": dest,
-                        "transaction_type": tx_type,
-                        "status": "SUCCESS",
+                        "transaction_type": tx_type_eff,
+                        "status": status,
                     })
+                    if is_scripted_attack:
+                        attack_events.append({
+                            "event_id": f"EV_{len(attack_events)+1:08d}",
+                            "transaction_id": tx_id_str,
+                            "account_id": acc_id,
+                            "timestamp": t_time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "attack_type": "scripted_cashout_transfer",
+                            "ring_id": ring_id,
+                        })
                     tx_idx += 1
 
     # -------------------------------------------------------------------------
@@ -520,19 +695,27 @@ def generate_synthetic_data(
     # -------------------------------------------------------------------------
     df_accounts = pd.DataFrame(accounts)
     df_transactions = pd.DataFrame(transactions)
+    df_attack_events = pd.DataFrame(attack_events)
 
     # Sort transactions chronologically
     df_transactions["timestamp_dt"] = pd.to_datetime(df_transactions["timestamp"])
     df_transactions = df_transactions.sort_values("timestamp_dt").reset_index(drop=True)
     df_transactions = df_transactions.drop(columns=["timestamp_dt"])
 
+    if not df_attack_events.empty:
+        df_attack_events["timestamp_dt"] = pd.to_datetime(df_attack_events["timestamp"])
+        df_attack_events = df_attack_events.sort_values("timestamp_dt").reset_index(drop=True)
+        df_attack_events = df_attack_events.drop(columns=["timestamp_dt"])
+
     # Persist to disk
     os.makedirs(output_dir, exist_ok=True)
     accounts_file = os.path.join(output_dir, "accounts.csv")
     transactions_file = os.path.join(output_dir, "transactions.csv")
+    attack_events_file = os.path.join(output_dir, "attack_events.csv")
 
     df_accounts.to_csv(accounts_file, index=False)
     df_transactions.to_csv(transactions_file, index=False)
+    df_attack_events.to_csv(attack_events_file, index=False)
 
     return df_accounts, df_transactions
 

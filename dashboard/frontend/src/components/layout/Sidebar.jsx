@@ -20,11 +20,11 @@ const NAV_ITEMS = [
 
 export default function Sidebar({ currentPage, onNavigate }) {
   return (
-    <aside className="w-64 bg-[#0B0F19] border-r border-[#1E293B] flex flex-col justify-between h-screen fixed left-0 top-0 select-none z-30">
+    <aside className="w-64 bg-[#EAE8E0] border-r border-[#E2E0D8] flex flex-col justify-between h-screen fixed left-0 top-0 select-none z-30">
       {/* Brand Header */}
       <div>
-        <div className="p-5 border-b border-[#1E293B]/70 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-cyan-500/25 border border-white/10 ring-1 ring-cyan-400/20 flex-shrink-0">
+        <div className="p-5 border-b border-[#E2E0D8] flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-[#147D69] flex items-center justify-center shadow-sm flex-shrink-0">
             <svg
               className="w-5 h-5 text-white"
               viewBox="0 0 24 24"
@@ -43,11 +43,11 @@ export default function Sidebar({ currentPage, onNavigate }) {
             </svg>
           </div>
           <div className="flex flex-col justify-center min-w-0">
-            <div className="font-mono text-[13.5px] tracking-wider text-white flex items-center gap-1.5 leading-none">
-              <span className="font-bold text-slate-100">RING</span>
-              <span className="font-extrabold text-cyan-400">SENTINEL</span>
+            <div className="font-sans text-[13.5px] tracking-wider flex items-center gap-1.5 leading-none">
+              <span className="font-bold text-[#252B29]">RING</span>
+              <span className="font-extrabold text-[#147D69]">SENTINEL</span>
             </div>
-            <div className="text-[9.5px] uppercase tracking-[0.16em] text-slate-400 font-semibold font-sans mt-1 leading-none">
+            <div className="text-[9.5px] uppercase tracking-[0.16em] text-[#737A76] font-semibold font-sans mt-1 leading-none">
               AI RISK INTELLIGENCE
             </div>
           </div>
@@ -64,14 +64,14 @@ export default function Sidebar({ currentPage, onNavigate }) {
                 onClick={() => onNavigate(item.id)}
                 className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition-all duration-150 text-left ${
                   isActive
-                    ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 shadow-sm shadow-cyan-500/10'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#151C2C] border border-transparent'
+                    ? 'bg-[#147D69]/10 text-[#147D69] border border-[#147D69]/30 shadow-sm'
+                    : 'text-[#737A76] hover:text-[#3D4543] hover:bg-[#F3F1EB] border border-transparent'
                 }`}
               >
-                <Icon className={`w-4 h-4 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
+                <Icon className={`w-4 h-4 ${isActive ? 'text-[#147D69]' : 'text-[#737A76]'}`} />
                 <span>{item.label}</span>
                 {isActive && (
-                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-sm shadow-cyan-400" />
+                  <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[#147D69]" />
                 )}
               </button>
             );
@@ -80,18 +80,18 @@ export default function Sidebar({ currentPage, onNavigate }) {
       </div>
 
       {/* Footer System Status */}
-      <div className="p-4 border-t border-[#1E293B]/70">
-        <div className="bg-[#111726] border border-[#1E293B] rounded-lg p-3">
+      <div className="p-4 border-t border-[#E2E0D8]">
+        <div className="bg-white border border-[#E2E0D8] rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="text-[11px] font-semibold text-slate-200 uppercase tracking-wider">
+            <ShieldCheck className="w-3.5 h-3.5 text-[#147D69]" />
+            <span className="text-[11px] font-semibold text-[#252B29] uppercase tracking-wider">
               Prototype Active
             </span>
           </div>
-          <p className="text-[10px] text-slate-400 leading-relaxed">
+          <p className="text-[10px] text-[#737A76] leading-relaxed">
             10K Accounts • Synthetic Benchmark
           </p>
-          <div className="mt-2 text-[9px] font-mono text-slate-400 border-t border-[#1E293B]/60 pt-1.5">
+          <div className="mt-2 text-[9px] font-mono text-[#737A76] border-t border-[#E2E0D8] pt-1.5">
             Defensive SOC • Non-Blocking
           </div>
         </div>

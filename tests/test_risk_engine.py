@@ -258,6 +258,82 @@ class TestRiskEngine(unittest.TestCase):
         self.assertGreaterEqual(len(df_clu), 1)
         self.assertEqual(df_clu.isna().sum().sum(), 0, "Found NaNs in cluster risk output")
 
+    def test_weak_timing_similarity_does_not_trigger_corroboration(self):
+        """
+        Verify that ordinary diurnal timing similarity (t_sim ~ 0.40) and moderate diurnal peer counts
+        do NOT falsely trigger strong corroboration or elevate graph risk.
+        """
+        normal_diurnal_features = pd.DataFrame([{
+            "account_id": "ACC_DIURNAL",
+            "average_transaction_timing_similarity": 0.42,
+            "number_of_accounts_with_similar_transaction_timing": 15,
+            "number_of_accounts_with_shared_destinations": 2,
+            "unique_destinations": 5,
+            "transfer_transaction_ratio": 0.10,
+            "accounts_sharing_device": 0,
+            "accounts_sharing_ip": 1,
+            "transactions_per_active_day": 1.3,
+            "cashout_transaction_ratio": 0.02,
+            "night_transaction_ratio": 0.03,
+        }])
+        g_scores = compute_graph_evidence(normal_diurnal_features, df_clusters=None)
+        # Should receive low uncorroborated local signal (<= 15.0)
+        self.assertLessEqual(g_scores[0], 15.0)
+
+    def test_ordinary_shared_infrastructure_remains_low_risk(self):
+        """
+        Verify that accounts sharing IP/devices in benign environments (campuses, households, offices)
+        without behavioral coordination receive capped graph evidence (<= 15.0) and remain in LOW risk.
+        """
+        campus_features = pd.DataFrame([{
+            "account_id": "ACC_CAMPUS",
+            "average_transaction_timing_similarity": 0.38,
+            "number_of_accounts_with_similar_transaction_timing": 10,
+            "number_of_accounts_with_shared_destinations": 3,
+            "unique_destinations": 6,
+            "transfer_transaction_ratio": 0.12,
+            "accounts_sharing_device": 1,
+            "accounts_sharing_ip": 18,  # heavy shared campus/dorm IP
+            "transactions_per_active_day": 1.2,
+            "cashout_transaction_ratio": 0.0,
+            "night_transaction_ratio": 0.04,
+        }])
+        g_scores = compute_graph_evidence(campus_features, df_clusters=None)
+        self.assertLessEqual(g_scores[0], 15.0, "Ordinary shared IP produced excessive graph risk")
+
+        # Even with modest ML probability, composite risk must remain in LOW tier
+        ml = compute_ml_evidence(np.array([0.15]))
+        coord = compute_coordination_evidence(campus_features)
+        rel = compute_relationship_evidence(campus_features)
+        comp = compute_composite_risk_score(ml, g_scores, coord, rel)
+        lvl, act = assign_risk_level_and_action(comp[0])
+        self.assertEqual(lvl, "LOW", f"Benign shared infrastructure assigned risk level {lvl}")
+
+    def test_stale_cluster_ids_discarded(self):
+        """
+        Verify that cluster references to nonexistent or historical prototype accounts
+        are strictly discarded and do not corrupt operational risk scores.
+        """
+        features = pd.DataFrame([{"account_id": "ACC_VALID_1"}])
+        stale_clusters = pd.DataFrame([{
+            "cluster_id": "CLUSTER_STALE",
+            "num_accounts": 50,
+            "average_edge_strength": 2.0,
+            "graph_density": 0.90,
+            "accounts_list": "OLD_PROTO_001|OLD_PROTO_002|NONEXISTENT_999",
+        }])
+        g_scores = compute_graph_evidence(features, stale_clusters)
+        self.assertEqual(g_scores[0], 0.0, "Stale cluster assigned score to non-member account")
+
+    def test_invalid_account_id_handled_safely(self):
+        """
+        Verify that normalize_account_id preserves exact strings and does not forcibly zero-pad.
+        """
+        from src.scoring.risk_engine import normalize_account_id
+        self.assertEqual(normalize_account_id("ACC_001"), "ACC_001")
+        self.assertEqual(normalize_account_id("  ACC_99  "), "ACC_99")
+        self.assertEqual(normalize_account_id("INVALID_ID"), "INVALID_ID")
+
 
 if __name__ == "__main__":
     unittest.main()

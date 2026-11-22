@@ -11,6 +11,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!dashboard/frontend/dist/
 downloads/
 eggs/
 .eggs/
@@ -45,13 +46,20 @@ venv.bak/
 .pytest_cache/
 .coverage
 htmlcov/
+catboost_info/
 
 # Data artifacts
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/backup*/
 
 # macOS
 .DS_Store
 node_modules/
+
+# Secrets and environment configurations
+.env
+.env.*
+!.env.example

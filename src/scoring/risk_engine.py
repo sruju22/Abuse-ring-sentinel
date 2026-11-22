@@ -58,12 +58,11 @@ ACTION_MAPPING: dict[str, str] = {
 
 
 def normalize_account_id(acc_id: str, target_digits: int = 6) -> str:
-    """Normalizes account IDs to ensure consistent matching across modules (e.g. ACC_0001 -> ACC_000001)."""
-    s = str(acc_id).strip()
-    parts = s.split("_")
-    if len(parts) == 2 and parts[1].isdigit():
-        return f"{parts[0]}_{parts[1].zfill(target_digits)}"
-    return s
+    """
+    Validates and standardizes account ID strings without corrupting historical or prototype IDs.
+    Stale or mismatched IDs are rejected rather than forcibly zero-padded into other accounts.
+    """
+    return str(acc_id).strip()
 
 
 # =============================================================================
@@ -96,45 +95,100 @@ def compute_graph_evidence(
       - Average edge strength (multi-faceted link weight)
       - Cluster size (scale of coordination)
       - Local entity degree (shared destinations, devices, IPs)
+
+    Safeguards:
+      - Strict Validation: Account IDs are strictly validated against active features;
+        stale cluster references or historical prototype IDs are discarded.
+      - Infrastructure vs. Abuse Disambiguation:
+        Ordinary shared infrastructure (campuses, households, corporate offices, public Wi-Fi)
+        is protected from automatic high-risk scoring. Shared IP/device evidence is only
+        treated as high-risk abuse when corroborated by:
+          1. Destination funneling (high peer count into narrow targets), OR
+          2. Temporal burst synchronization (high timing similarity with synchronized peers), OR
+          3. Behavioral anomalies (abnormal transaction velocity >= 2.0, cashout ratio >= 0.10,
+             or elevated night activity >= 0.15).
+        Uncorroborated shared infrastructure is strictly bounded to LOW risk (<= 15.0).
     """
-    # Build fast account -> cluster lookup if clusters are available
+    valid_accs = set(df_features["account_id"].astype(str))
+
+    # Build account -> cluster lookup validating strictly against active accounts
     acc_to_cluster: dict[str, dict[str, Any]] = {}
     if df_clusters is not None and not df_clusters.empty:
         for _, row in df_clusters.iterrows():
             accounts = str(row["accounts_list"]).split("|")
             for acc in accounts:
-                c_data = {
-                    "cluster_id": row["cluster_id"],
-                    "num_accounts": float(row["num_accounts"]),
-                    "average_edge_strength": float(row["average_edge_strength"]),
-                    "graph_density": float(row["graph_density"]),
-                }
-                acc_to_cluster[acc] = c_data
-                acc_to_cluster[normalize_account_id(acc)] = c_data
+                acc_clean = str(acc).strip()
+                if acc_clean in valid_accs:
+                    c_data = {
+                        "cluster_id": row["cluster_id"],
+                        "num_accounts": float(row["num_accounts"]),
+                        "average_edge_strength": float(row["average_edge_strength"]),
+                        "graph_density": float(row["graph_density"]),
+                    }
+                    acc_to_cluster[acc_clean] = c_data
 
     scores = []
     for _, row in df_features.iterrows():
-        acc_id = str(row["account_id"])
-        c_info = acc_to_cluster.get(acc_id) or acc_to_cluster.get(normalize_account_id(acc_id))
-        
+        acc_id = str(row["account_id"]).strip()
+        c_info = acc_to_cluster.get(acc_id)
+
+        shared_dests = float(row.get("number_of_accounts_with_shared_destinations", 0))
+        unique_dests = float(row.get("unique_destinations", 0))
+        transfer_ratio = float(row.get("transfer_transaction_ratio", 0.0))
+        shared_devs = float(row.get("accounts_sharing_device", 0))
+        shared_ips = float(row.get("accounts_sharing_ip", 0))
+        timing_sim = float(row.get("average_transaction_timing_similarity", 0.0))
+        timing_peers = float(row.get("number_of_accounts_with_similar_transaction_timing", 0))
+        velocity = float(row.get("transactions_per_active_day", 1.0))
+        cashout_ratio = float(row.get("cashout_transaction_ratio", 0.0))
+        night_ratio = float(row.get("night_transaction_ratio", 0.0))
+
+        # Multi-factor corroboration logic:
+        # A) Coordinated Destination Funneling: high volume of peers sharing destinations,
+        #    or focused funneling into very few unique destinations with active transfers.
+        funneling = (shared_dests >= 15) or (
+            (shared_dests >= 6) and (unique_dests <= 3) and (transfer_ratio >= 0.20)
+        )
+
+        # B) Temporal Burst Coordination: tight burst synchrony with multiple peers,
+        #    or extreme synchrony across the active timeframe.
+        burst_sync = ((timing_sim >= 0.55) and (timing_peers >= 8)) or (timing_sim >= 0.70)
+
+        # C) Corroborated Infrastructure Abuse: shared device/IP corroborated by behavioral
+        #    anomalies (velocity surge, cashout focus, night activity) or coordination.
+        infra_abuse = ((shared_devs > 0) or (shared_ips > 0)) and (
+            (velocity >= 2.0) or (cashout_ratio >= 0.10) or (night_ratio >= 0.15) or funneling or burst_sync
+        )
+
+        is_corroborated = funneling or burst_sync or infra_abuse
+
         # 1. Cluster community signal (if member of detected cluster)
         if c_info:
             c_density = c_info["graph_density"] * 40.0
             c_edge = min(c_info["average_edge_strength"] / 1.5, 1.0) * 40.0
             c_size = min(c_info["num_accounts"] / 20.0, 1.0) * 20.0
-            cluster_signal = c_density + c_edge + c_size
+            raw_cluster_signal = c_density + c_edge + c_size
+
+            # If cluster member has no corroborating coordination evidence, damp cluster signal
+            if is_corroborated:
+                cluster_signal = raw_cluster_signal
+            else:
+                cluster_signal = min(raw_cluster_signal * 0.25, 15.0)
         else:
             cluster_signal = 0.0
 
         # 2. Local graph connectivity signal
-        shared_dests = float(row.get("number_of_accounts_with_shared_destinations", 0))
-        shared_devs = float(row.get("accounts_sharing_device", 0))
-        shared_ips = float(row.get("accounts_sharing_ip", 0))
-
-        dest_signal = min(shared_dests / 10.0, 1.0) * 40.0
-        dev_signal = min(shared_devs / 4.0, 1.0) * 30.0
-        ip_signal = min(shared_ips / 15.0, 1.0) * 30.0
-        local_signal = dest_signal + dev_signal + ip_signal
+        if is_corroborated:
+            dest_signal = min(shared_dests / 10.0, 1.0) * 50.0
+            dev_signal = min(shared_devs / 4.0, 1.0) * 25.0
+            ip_signal = min(shared_ips / 15.0, 1.0) * 25.0
+            local_signal = dest_signal + dev_signal + ip_signal
+        else:
+            # Benign uncorroborated shared infrastructure:
+            # High-fanout shared IPs (dormitories, campuses, coffee shops) discounted heavily.
+            dev_signal = min(shared_devs / 2.0, 1.0) * 10.0
+            ip_signal = min(shared_ips / 15.0, 1.0) * 5.0
+            local_signal = dev_signal + ip_signal
 
         # Combine: take maximum of cluster community or direct local graph connectivity
         g_score = max(cluster_signal, local_signal)
@@ -349,13 +403,11 @@ def aggregate_cluster_risk_scores(
     if df_clusters.empty:
         return pd.DataFrame(columns=cluster_cols)
 
-    # Build account lookup map supporting both raw and normalized IDs
+    # Build account lookup map strictly validating exact IDs
     acc_risk_map: dict[str, dict[str, Any]] = {}
     for _, a_row in df_account_risk.iterrows():
-        a_id = str(a_row["account_id"])
-        a_dict = a_row.to_dict()
-        acc_risk_map[a_id] = a_dict
-        acc_risk_map[normalize_account_id(a_id)] = a_dict
+        a_id = str(a_row["account_id"]).strip()
+        acc_risk_map[a_id] = a_row.to_dict()
 
     cluster_records = []
 
@@ -369,7 +421,7 @@ def aggregate_cluster_risk_scores(
         all_reasons: set[str] = set()
 
         for a in accounts:
-            info = acc_risk_map.get(a) or acc_risk_map.get(normalize_account_id(a))
+            info = acc_risk_map.get(str(a).strip())
             if info is not None:
                 member_scores.append(float(info["final_risk_score"]))
                 member_coords.append(float(info["coordination_score"]))

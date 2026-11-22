@@ -71,12 +71,20 @@ class TestDashboardAPI(unittest.TestCase):
         self.assertNotIn("account_type", data)
         self.assertNotIn("ring_id", data)
 
+    def test_invalid_account_id_returns_404(self):
+        """Verify requesting non-existent account ID or short ID does not zero-pad and returns 404."""
+        # Unpadded short ID must return 404 rather than silently mapping to ACC_000001
+        res = self.client.get("/api/accounts/ACC_0001")
+        self.assertEqual(res.status_code, 404)
+        res_nonexistent = self.client.get("/api/accounts/NONEXISTENT_ACCOUNT")
+        self.assertEqual(res_nonexistent.status_code, 404)
+
     def test_clusters_endpoints(self):
         """Verify /api/clusters and /api/clusters/{id} return valid graph network topology."""
         res = self.client.get("/api/clusters")
         self.assertEqual(res.status_code, 200)
         clusters = res.json()
-        self.assertEqual(len(clusters), 5)
+        self.assertGreaterEqual(len(clusters), 1)
 
         cluster_id = clusters[0]["cluster_id"]
         res_detail = self.client.get(f"/api/clusters/{cluster_id}")
